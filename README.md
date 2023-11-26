@@ -13,11 +13,12 @@ LangChain is an Open-source developer framework for building LLM applications. I
 - Agents.
 
 ## LangChain steps
-1. Document Loading
-2. Document splitting
-3. Storage
-4. Retrieval
-5. Output via QA
+1. Document Loading.
+2. Document splitting.
+3. Storage.
+4. Retrieval.
+5. Output via QA.
+6. Memory to end with a Chatbot
 
 
 ### Document Loading
