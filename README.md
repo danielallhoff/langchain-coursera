@@ -73,3 +73,121 @@ markdown_splitter = MarkdownHeaderTextSplitter(
 )
 md_header_splits = markdown_splitter.split_text(markdown_document)
 ```
+
+### Vector Stores and Embeddings
+The chunks obtained are managed by indexes in order to answer to questions about the data. Embedding are obtained from the splitted text and stored with Vector Stores. Sentences which are similar have similar embeddings. An usage example:
+1. Splitted text is converted to embeddings
+2. Question is also converted to an embedding
+3. Comparison of the embeddings is done to obtain the n most similar
+4. Lastly, the LLM processes the data in order to obtain an appropiate result.
+
+Extract the embeddings with the `OpenAIEmbeddings`:
+```
+from langchain.embeddings.openai import OpenAIEmbeddings
+embedding = OpenAIEmbeddings()
+
+embedding1 = embedding.embed_query(sentence1)
+```
+
+The Vectorstores can be stored on Chroma and then similarity is done with:
+```
+from langchain.vectorstores import Chroma
+vectordb = Chroma.from_documents(
+    documents=splits,
+    embedding=embedding,
+    persist_directory=persist_directory
+)
+
+docs = vectordb.similarity_search(question,k=3)  # Obtain K most similar samples.
+
+vectordb.persist() # Save for future usage
+```
+
+### Retrieval
+The technique `Maximum marginal relevance` helps to obtain diverse results. The algorithm works by a first `fetch_k` documents and from this set choose the `k` most diverse.
+```
+docs_mmr = vectordb.max_marginal_relevance_search(question,k=3)
+```
+In some questions, it is of interest of the user to obtain data by searching with a term, but also with some specific metadata (e.g.: specific date, location...etc). In this case, we need to parse from the question the required data for the query and this can be done with a LLM. This technique is called selfquery:
+```
+from langchain.llms import OpenAI
+from langchain.retrievers.self_query.base import SelfQueryRetriever
+from langchain.chains.query_constructor.base import AttributeInfo
+
+metadata_field_info = [
+    AttributeInfo(
+        name=attribute_name,
+        description=description,
+        type=string,
+    ),
+    ...etc.
+]
+
+document_content_description = "Lecture notes"
+llm = OpenAI(temperature=0)
+retriever = SelfQueryRetriever.from_llm(
+    llm,
+    vectordb,
+    document_content_description,
+    metadata_field_info,
+    verbose=True
+)
+docs = retriever.get_relevant_documents(question)
+```
+Finally, with compression the data is passed to a LLM which filters out irrevelant data. 
+```
+from langchain.retrievers import ContextualCompressionRetriever
+from langchain.retrievers.document_compressors import LLMChainExtractor
+llm = OpenAI(temperature=0)
+compressor = LLMChainExtractor.from_llm(llm)
+compression_retriever = ContextualCompressionRetriever(
+    base_compressor=compressor,
+    base_retriever=vectordb.as_retriever()
+)
+compressed_docs = compression_retriever.get_relevant_documents(question)
+```
+
+### Question Answering
+Next step of the sequence is get the question and the documents passed to a LLM and obtain the response. When the documents are to large to fit into the LLM context it is useful to follow the next methods:
+- Map reduce. It uses the LLM to process an answer for each of the chunks before processing one complete answer
+- Refine. Add step by step the data via the LLM in order to refine the answer.
+- Map rerank. Make the LLM score the answer chunks and select the chunk of highest score.
+
+```
+from langchain.chains import RetrievalQA
+
+QA_CHAIN_PROMPT = PromptTemplate.from_template(template)
+qa_chain = RetrievalQA.from_chain_type(
+    llm,
+    retriever=vectordb.as_retriever(),
+    return_source_documents=True,
+    chain_type="map_reduce",  # OR refine or map_rerank
+    chain_type_kwargs={"prompt": QA_CHAIN_PROMPT}
+)
+```
+
+### Chat
+It is useful to maintain memory along the session for having questions which are related to previous one. This function can be managed by a chatbot. 
+
+```
+from langchain.memory import ConversationBufferMemory
+memory = ConversationBufferMemory(
+    memory_key="chat_history",
+    return_messages=True
+)
+from langchain.chains import ConversationalRetrievalChain
+retriever=vectordb.as_retriever()
+qa = ConversationalRetrievalChain.from_llm(
+    llm,
+    retriever=retriever,
+    memory=memory
+)
+result = qa({"question": question})
+print(result['answer'])
+```
+
+## Tips and tricks
+- Force variety of search results with `Maximum marginal relevance`.
+- Compress relevant splits to fit into LLM context.
+- Send information of question and response along to the LLM to obtain the answer.
+- Langchain tracing for view the retrieval process (langchain plus platform).
